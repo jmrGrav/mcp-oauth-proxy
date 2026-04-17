@@ -1,0 +1,60 @@
+[Unit]
+Description=MCP OAuth Proxy for Grav CMS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcp-proxy
+Group=mcp-proxy
+WorkingDirectory=/opt/mcp-oauth-proxy
+ExecStart=/opt/mcp-oauth-proxy/venv/bin/python mcp_oauth_proxy.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/mcp-oauth-proxy/secrets.env
+
+# ── Hardening ──────────────────────────────────────────────────────────────
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/opt/mcp-oauth-proxy /var/log/mcp-oauth
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+UMask=0077
+LimitNOFILE=4096
+TasksMax=64
+MemoryMax=256M
+
+# Network: loopback only (proxy calls Grav on 127.0.0.1)
+# Remove or adjust these lines if your Grav instance is on a different host
+RestrictAddressFamilies=AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=127.0.0.0/8
+IPAddressAllow=::1/128
+
+[Install]
+WantedBy=multi-user.target
