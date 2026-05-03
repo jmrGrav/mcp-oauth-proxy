@@ -15,6 +15,12 @@ Changements vs v1 :
 - GET /mcp ne liste plus les outils (anti-recon)
 - Appel Grav via 127.0.0.1 avec header Host (bypass Cloudflare)
 - Suppression limite time.time() négative dans _load_tokens
+v2 :
+- RFC 7591 dynamic client registration (/register + registration_endpoint dans metadata)
+- WWW-Authenticate header sur les 401 (RFC 6750 + RFC 9728)
+- resource URL corrigée vers /mcp (plus /oauth-mcp/mcp)
+- /.well-known/oauth-protected-resource/{path} accepte "mcp" comme suffixe
+- Fix double audit logging (handler guard)
 """
 
 import os
@@ -95,13 +101,15 @@ def _setup_audit_logger() -> logging.Logger:
     logger = logging.getLogger("mcp_audit")
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    try:
-        os.makedirs(os.path.dirname(AUDIT_LOG_FILE), exist_ok=True)
-        handler = logging.FileHandler(AUDIT_LOG_FILE)
-    except OSError:
-        handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    logger.addHandler(handler)
+    # Guard against double-handler on module re-import or worker fork
+    if not logger.handlers:
+        try:
+            os.makedirs(os.path.dirname(AUDIT_LOG_FILE), exist_ok=True)
+            handler = logging.FileHandler(AUDIT_LOG_FILE)
+        except OSError:
+            handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
     return logger
 
 
@@ -251,6 +259,25 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="MCP OAuth Proxy", lifespan=lifespan)
 
 
+# ─── Helpers WWW-Authenticate ────────────────────────────────────────────────
+
+def _www_authenticate_header() -> str:
+    """RFC 6750 + RFC 9728 : indique où trouver les métadonnées OAuth."""
+    return (
+        f'Bearer realm="{PROXY_BASE_URL}",'
+        f' resource_metadata="{PROXY_BASE_URL}/.well-known/oauth-protected-resource"'
+    )
+
+
+def _unauthorized(detail: str) -> JSONResponse:
+    """401 avec WWW-Authenticate pour que Claude.ai démarre le flux OAuth."""
+    return JSONResponse(
+        {"error": "unauthorized", "error_description": detail},
+        status_code=401,
+        headers={"WWW-Authenticate": _www_authenticate_header()},
+    )
+
+
 # ─── OAuth Discovery ─────────────────────────────────────────────────────────
 
 @app.get("/.well-known/oauth-authorization-server")
@@ -260,43 +287,76 @@ async def oauth_authorization_server():
         "issuer": PROXY_BASE_URL,
         "authorization_endpoint": f"{PROXY_BASE_URL}/authorize",
         "token_endpoint": f"{PROXY_BASE_URL}/token",
+        "registration_endpoint": f"{PROXY_BASE_URL}/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256"],
         # Mode public client (PKCE-only) ET post (pour compat)
         "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
         "scopes_supported": ["mcp"],
-        "service_documentation": f"{PROXY_BASE_URL}/oauth-mcp/mcp",
+        "service_documentation": f"{PROXY_BASE_URL}/mcp",
     })
 
 
 @app.get("/.well-known/oauth-protected-resource")
 async def oauth_protected_resource():
-    """RFC 9728 — Protected Resource Metadata. Différent du authorization server."""
+    """RFC 9728 — Protected Resource Metadata."""
     return JSONResponse({
-        "resource": f"{PROXY_BASE_URL}/oauth-mcp/mcp",
+        "resource": f"{PROXY_BASE_URL}/mcp",
         "authorization_servers": [PROXY_BASE_URL],
         "bearer_methods_supported": ["header"],
         "scopes_supported": ["mcp"],
-        "resource_documentation": f"{PROXY_BASE_URL}/oauth-mcp/mcp",
+        "resource_documentation": f"{PROXY_BASE_URL}/mcp",
     })
 
 
 @app.get("/.well-known/oauth-protected-resource/{resource_path:path}")
 async def oauth_protected_resource_suffixed(resource_path: str):
-    """RFC 9728 — Forme path-suffixée utilisée par Claude.ai pour MCP."""
-    if resource_path != "oauth-mcp/mcp":
-        return JSONResponse(
-            {"error": "not_found", "error_description": "Unknown resource"},
-            status_code=404,
-        )
+    """RFC 9728 — Forme path-suffixée : /.well-known/oauth-protected-resource/<mcp-path>."""
+    # Accept any subpath — Claude.ai appends the MCP endpoint path (e.g. "mcp")
     return JSONResponse({
-        "resource": f"{PROXY_BASE_URL}/oauth-mcp/mcp",
+        "resource": f"{PROXY_BASE_URL}/mcp",
         "authorization_servers": [PROXY_BASE_URL],
         "bearer_methods_supported": ["header"],
         "scopes_supported": ["mcp"],
-        "resource_documentation": f"{PROXY_BASE_URL}/oauth-mcp/mcp",
+        "resource_documentation": f"{PROXY_BASE_URL}/mcp",
     })
+
+
+# ─── Dynamic Client Registration (RFC 7591) ──────────────────────────────────
+
+@app.post("/register")
+async def register_client(request: Request):
+    """RFC 7591 — Dynamic Client Registration.
+    Retourne le CLIENT_ID pré-configuré pour que Claude.ai puisse démarrer le flux OAuth."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    redirect_uris = body.get("redirect_uris", [])
+
+    # Valider les redirect_uris si fournies
+    for uri in redirect_uris:
+        if not _is_allowed_redirect(uri):
+            audit_log("register_rejected", request, reason="redirect_uri", value=uri[:200])
+            return JSONResponse(
+                {"error": "invalid_redirect_uri", "error_description": f"redirect_uri not allowed: {uri}"},
+                status_code=400,
+            )
+
+    audit_log("client_registered", request, redirect_uris=redirect_uris[:5])
+
+    return JSONResponse({
+        "client_id": CLIENT_ID,
+        "client_id_issued_at": int(time.time()),
+        "redirect_uris": redirect_uris,
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+        "code_challenge_methods_supported": ["S256"],
+        "scope": "mcp",
+    }, status_code=201)
 
 
 # ─── Authorization Endpoint ──────────────────────────────────────────────────
@@ -439,19 +499,31 @@ async def token(
 
 # ─── Vérification token entrant ──────────────────────────────────────────────
 
-async def _check_token(request: Request):
+async def _check_token(request: Request) -> None:
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         audit_log("mcp_rejected", request, reason="no_bearer")
-        raise HTTPException(401, "Token manquant")
+        raise HTTPException(
+            status_code=401,
+            detail="Token manquant",
+            headers={"WWW-Authenticate": _www_authenticate_header()},
+        )
     tok = auth.removeprefix("Bearer ").strip()
     if not tok:
         audit_log("mcp_rejected", request, reason="empty_token")
-        raise HTTPException(401, "Token vide")
+        raise HTTPException(
+            status_code=401,
+            detail="Token vide",
+            headers={"WWW-Authenticate": _www_authenticate_header()},
+        )
     token_hash = _hash_token(tok)
     if token_hash not in _access_tokens:
         audit_log("mcp_rejected", request, reason="token_invalid")
-        raise HTTPException(401, "Token invalide")
+        raise HTTPException(
+            status_code=401,
+            detail="Token invalide",
+            headers={"WWW-Authenticate": _www_authenticate_header()},
+        )
 
 
 def _proxy_response(resp: httpx.Response) -> StarletteResponse:
