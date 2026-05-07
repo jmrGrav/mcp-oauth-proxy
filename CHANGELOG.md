@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.0.0
+### 07-05-2026
+* **BREAKING** : suppression du cache `tools/list` — le proxy devient transparent pour toutes les requêtes MCP
+* Chaque `tools/list` est désormais relayé directement au backend ; le schéma exposé est toujours celui du backend en temps réel
+* Suppression de `_tools_cache`, `_fetch_tools()`, et du warm-up au démarrage
+* **Bénéfice** : toute évolution du schéma backend est visible immédiatement sans redémarrage du proxy
+* Migration : reconnecter le connecteur MCP côté client (Claude.ai) après la mise à jour pour rafraîchir le schéma côté session
+
 ## v1.1.0
 ### 03-05-2026
 * RFC 7591 dynamic client registration — `POST /register` endpoint (required by Claude.ai)

@@ -194,35 +194,6 @@ _access_tokens: dict = _load_tokens()
 print(f"[INFO] {len(_access_tokens)} token(s) chargé(s) depuis {TOKENS_FILE}")
 
 
-# ─── Cache des outils (pour répondre vite à tools/list) ─────────────────────
-
-_tools_cache: list | None = None
-
-
-async def _fetch_tools() -> list:
-    global _tools_cache
-    if _tools_cache is not None:
-        return _tools_cache
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                GRAV_MCP_URL,
-                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
-                headers={
-                    "Host": GRAV_HOST,
-                    "Authorization": f"Bearer {GRAV_TOKEN}",
-                    "Content-Type": "application/json",
-                },
-            )
-            data = resp.json()
-            tools = data.get("result", {}).get("tools", [])
-            if tools:
-                _tools_cache = tools
-                print(f"[INFO] {len(tools)} outil(s) mis en cache")
-            return tools
-    except Exception as e:
-        print(f"[WARN] Impossible de récupérer les outils: {e}", file=sys.stderr)
-        return []
 
 
 # ─── Purge périodique des tokens expirés ────────────────────────────────────
@@ -248,7 +219,6 @@ async def _purge_expired_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await _fetch_tools()
     purge_task = asyncio.create_task(_purge_expired_loop())
     audit_log("service_start", tokens_loaded=len(_access_tokens))
     yield
@@ -565,16 +535,6 @@ async def mcp_post(request: Request):
     try:
         body_json = json.loads(body_bytes)
         method_name = body_json.get("method")
-        # tools/list servi depuis le cache
-        if method_name == "tools/list":
-            tools = await _fetch_tools()
-            if tools:
-                audit_log("mcp_tools_list", request, source="cache")
-                return JSONResponse({
-                    "jsonrpc": "2.0",
-                    "id": body_json.get("id"),
-                    "result": {"tools": tools},
-                })
     except Exception:
         pass
 
@@ -590,16 +550,6 @@ async def mcp_post(request: Request):
                 "Content-Type": request.headers.get("Content-Type", "application/json"),
             },
         )
-
-    # Mise à jour cache si Grav retourne des outils
-    try:
-        data = resp.json()
-        tools = data.get("result", {}).get("tools")
-        if tools:
-            global _tools_cache
-            _tools_cache = tools
-    except Exception:
-        pass
 
     return _proxy_response(resp)
 
