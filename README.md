@@ -28,6 +28,11 @@ The proxy handles the full OAuth 2.1 Authorization Code + PKCE flow so that
 Claude.ai can authenticate and call MCP tools exposed by
 [grav-plugin-mcp-server](https://github.com/jmrGrav/grav-plugin-mcp-server).
 
+**Design principle**: the proxy is *transparent* for MCP requests — it performs
+authentication only and relays all tool calls (including `tools/list`) directly
+to the backend. The backend is the single source of truth for tool schemas.
+Schema changes are visible to clients immediately, without proxy restart.
+
 ## Security Features
 
 - **OAuth 2.1** with PKCE S256 (mandatory for public clients)
@@ -163,7 +168,7 @@ tail -f /var/log/mcp-oauth/audit.log | jq .
 
 Audit events: `service_start`, `service_stop`, `authorize_approved`,
 `authorize_rejected`, `token_issued`, `token_rejected`, `mcp_forward`,
-`mcp_rejected`, `mcp_tools_list`.
+`mcp_rejected`.
 
 ## License
 
