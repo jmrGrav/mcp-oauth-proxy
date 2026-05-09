@@ -63,6 +63,7 @@ TOKENS_FILE     = _env("TOKENS_FILE", "/opt/mcp-oauth-proxy/tokens.json", requir
 AUDIT_LOG_FILE  = _env("AUDIT_LOG_FILE", "/var/log/mcp-oauth/audit.log", required=False)
 LISTEN_HOST     = _env("LISTEN_HOST", "127.0.0.1", required=False)
 LISTEN_PORT     = int(_env("LISTEN_PORT", "8083", required=False))
+MCP_CA_CERT     = _env("MCP_CA_CERT", None, required=False)   # C6: TLS cert for VM backend
 
 AUTH_CODE_TTL   = 300                    # 5 minutes
 TOKEN_TTL       = None                   # Tokens sans expiration
@@ -540,7 +541,7 @@ async def mcp_post(request: Request):
 
     audit_log("mcp_forward", request, method=method_name or "unknown")
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, verify=MCP_CA_CERT or True) as client:
         resp = await client.post(
             GRAV_MCP_URL,
             content=body_bytes,

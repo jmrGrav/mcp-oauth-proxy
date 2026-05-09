@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.1.0 — 2026-05-09
+
+### Security (C6)
+- `MCP_CA_CERT` env var — path to backend TLS certificate for verification
+- `httpx.AsyncClient(verify=MCP_CA_CERT or True)` — verifies backend EC P-256 self-signed cert when `MCP_CA_CERT` is set; falls back to system CAs (or `True` for skip-verify) when unset
+- Compatible with `GRAV_MCP_URL=https://...` (backend must run with TLS via `--ssl-certfile`)
+
 ## v2.0.0
 ### 07-05-2026
 * **BREAKING** : suppression du cache `tools/list` — le proxy devient transparent pour toutes les requêtes MCP
