@@ -170,6 +170,24 @@ Audit events: `service_start`, `service_stop`, `authorize_approved`,
 `authorize_rejected`, `token_issued`, `token_rejected`, `mcp_forward`,
 `mcp_rejected`.
 
+## Project Status
+
+This Python implementation remains **maintained and fully functional**. It is the current production-authoritative OAuth proxy.
+
+A next-generation Go implementation is available:
+
+**[https://github.com/jmrGrav/mcp-runtime-go](https://github.com/jmrGrav/mcp-runtime-go)**
+
+The Go runtime is the strategic direction for future development and provides:
+
+- Stronger observability (structured JSON audit log with per-request correlation IDs)
+- Shadow deployment support (mirror mode + `shadow-compare` audit comparison tool)
+- Improved test coverage and operational tooling
+- Future integration path with Hugo MCP
+- Foundation for multi-domain MCP hosting
+
+The Python implementation remains the **stable reference implementation** and will continue to serve traffic until the Go shadow deployment gate is passed. See [docs/MIGRATION_TO_GO.md](docs/MIGRATION_TO_GO.md) for the migration strategy.
+
 ## License
 
 MIT — Jm Rohmer / [arleo.eu](https://arleo.eu)
